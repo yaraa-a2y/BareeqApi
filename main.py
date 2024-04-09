@@ -1,19 +1,19 @@
-from os import name
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import pdfplumber
 import pandas as pd
 import re
 from pathlib import Path
+import shutil
+import os
 
 app = FastAPI()
 
 # Setup CORS
 origins = [
-    "http://localhost",
-    "http://127.0.0.1:8000",
+    "http://127.0.0.1:8000",  # Adjust the port if your client runs on a different one
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -22,32 +22,31 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-UPLOAD_FOLDER = Path('uploads')
+UPLOAD_FOLDER = 'uploads'
 ALLOWED_EXTENSIONS = {'pdf'}
-
+Path(UPLOAD_FOLDER).mkdir(parents=True, exist_ok=True)
 
 def allowed_file(filename: str):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-
-def extract_text_from_pdf(pdf_path):
+def extract_text_from_pdf(pdf_path: str):
     text = ""
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
-            text += page.extract_text()
+            text += page.extract_text() or ""  # Added or "" to handle cases where extract_text() returns None
     return text
 
-
-@app.post("/upload/")
+@app.post("/upload")
 async def upload_and_process_pdf(file: UploadFile = File(...)):
     if not allowed_file(file.filename):
-        raise HTTPException(status_code=400, detail="File type not allowed")
+        return JSONResponse(status_code=400, content={"message": "File type not allowed"})
 
     filename = Path(file.filename).name
-    pdf_path = UPLOAD_FOLDER / filename
+    pdf_path = os.path.join(UPLOAD_FOLDER, filename)
 
+    # Save file to disk
     with open(pdf_path, "wb") as buffer:
-        buffer.write(await file.read())
+        shutil.copyfileobj(file.file, buffer)  # Adjusted for async file upload handling
 
     text = extract_text_from_pdf(pdf_path)
 
@@ -61,14 +60,11 @@ async def upload_and_process_pdf(file: UploadFile = File(...)):
 
     df = pd.DataFrame(list(arr.items()), columns=['Test', 'Result'])
     keywords = ['Haemoglobin', 'Hemoglobin', 'Iron', 'Vitamin D', 'Vitamin B12']
-    filtered_df = df[df['Test'].str.contains('|'.join(keywords))]
+    filtered_df = df[df['Test'].str.contains('|'.join(keywords), case=False)]  # case=False for case insensitive match
 
     result_array = filtered_df.to_dict('records')
     return result_array
 
-
-if name == 'main':
-    if not UPLOAD_FOLDER.exists():
-        UPLOAD_FOLDER.mkdir(parents=True)
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+#if name == 'main':
+  #  import uvicorn
+  #  uvicorn.run(app, host="0.0.0.0", port=8000, log_level="debug")
